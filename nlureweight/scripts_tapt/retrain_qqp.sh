@@ -1,0 +1,31 @@
+#!/bin/bash
+
+# In this example, we show how to train SimCSE on unsupervised Wikipedia data.
+# If you want to train it with multiple GPU cards, see "run_sup_example.sh"
+# about how to use PyTorch's distributed data parallel.
+
+python retrain.py \
+    --model_name_or_path /home/ruiyi/taskweight/result/roberta-base-tapt-qqp \
+    --train_file data/wiki1m_for_simcse.txt \
+    --output_dir result/my-unsup-simcse-roberta-base-uncased-mlm-debug \
+    --num_train_epochs 10 \
+    --batch_size 32 \
+    --weight_decay 0.002 \
+    --learning_rate 3e-5 \
+    --max_seq_length 512 \
+    --evaluation_strategy steps \
+    --metric_for_best_model accuracy \
+    --load_best_model_at_end \
+    --eval_steps 125 \
+    --pooler_type cls \
+    --mlp_only_train \
+    --overwrite_output_dir \
+    --temp 0.05 \
+    --do_eval \
+    --do_train \
+    --fp16 \
+    --task qqp \
+    --load_save  \
+    --finetune_lr 2e-5 \
+    "$@"
+    

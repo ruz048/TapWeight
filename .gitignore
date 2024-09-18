@@ -1,0 +1,94 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Virtual environment
+venv/
+env/
+ENV/
+.venv/
+.VENV/
+pyenv/
+.Pyenv/
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# Cache and logs
+*.log
+*.out
+*.err
+*.txt
+*.cache
+*.gz
+*.zip
+*.tar
+*.egg-info/
+*.eggs/
+*.whl
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+
+# Distribution / packaging
+build/
+dist/
+*.egg
+*.egg-info/
+eggs/
+wheels/
+pip-wheel-metadata/
+*.manifest
+*.spec
+
+# C extensions
+*.so
+
+# PyInstaller
+#  Usually these are written by a python script from a template
+#  before PyInstaller builds the exe, so as to inject date/other infos into it.
+*.manifest
+*.spec
+
+# Jupyter Notebook files
+.ipynb_checkpoints/
+
+# macOS-specific files
+.DS_Store
+
+# System files (macOS/Linux/Windows)
+*.DS_Store
+Thumbs.db
+desktop.ini
+
+# Machine learning specific directories
+data/
+models/
+results/
+logs/
+checkpoints/
+tensorboard_logs/
+
+# PyCharm project files
+.idea/
+
+# VSCode settings
+.vscode/
+
+# Anaconda virtual environment files
+.env
+.conda
+*.conda
+*.env
+*.environ
