@@ -19,3 +19,9 @@ We also provided an implementation of bi-level optimization framework (reweight_
 The code is based on the SimCSE repo (https://github.com/princeton-nlp/SimCSE). To run the scripts, please follow instructions in processing data in SimCSE and put data path into the script.
 
 To run the TapWeight framework, use the main.sh script.
+
+## Retraining
+
+TapWeight is a task-adaptive pretraining framework, so it is necessary to perform finetuning after running TapWeight to achieve optimal performance. For the two application above, implementation of finetuning can be found in their original repo. 
+
+For example, the Imagemol repo contains code and instructions on how to finetune a checkpoint on a custom downstream dataset. To conduct retraining for TapWeight, simply replace the Imagemol checkpoint with TapWeight checkpoint.   
