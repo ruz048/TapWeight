@@ -14,7 +14,6 @@ python reweight.py \
     --split scaffold \
     --iters 10000 \
     --resume ImageMol.pth.tar \
-    --wandb \
-    #--same_ft_dataset
+    --wandb 
     
     

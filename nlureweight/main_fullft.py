@@ -49,13 +49,6 @@ parser = HfArgumentParser((ModelArguments, DataTrainingArguments, OurTrainingArg
 parser = argument_parser(parser)
 model_args, data_args, training_args, args = parser.parse_args_into_dataclasses()
 
-print(args)
-print(model_args)
-print(data_args)
-print(training_args)
-
-
-
 if args.wandb:
     wandb.login()
     run = wandb.init(
@@ -77,7 +70,7 @@ if args.same_dataset:
         if sentence2_key:
             data_list.append({'text':d[sentence2_key]})
     datasets={'train':Dataset.from_list(data_list)}
-    #exit()
+
 else:
 
     data_files = {}
@@ -92,14 +85,6 @@ else:
         datasets = load_dataset(extension, data_files=data_files, cache_dir="./data/")
 
 
-# See more about loading any type of standard or custom dataset (from files, python dict, pandas DataFrame, etc) at
-# https://huggingface.co/docs/datasets/loading_datasets.html.
-
-# Load pretrained model and tokenizer
-#
-# Distributed training:
-# The .from_pretrained methods guarantee that only one local process can concurrently
-# download model & vocab.
 config_kwargs = {
     "cache_dir": model_args.cache_dir,
     "revision": model_args.model_revision,
@@ -235,12 +220,7 @@ def prepare_features(examples):
             #print(len_sen_sop)
             tokens_a = tokens_sop[:len_sen_sop_a]
             tokens_b = tokens_sop[len_sen_sop_a:len_sen_sop]
-            '''
-            print(tokens_sop)
-            print(tokens_a)
-            print(tokens_b)
-            exit()
-            '''
+
             is_next = rand() < 0.5 # whether token_b is next to token_a or not
             if is_next:
                 features['sop_input_ids'].append(tokenizer.convert_tokens_to_ids(['<s>'] + tokens_a + ['</s>'] + tokens_b + ['</s>']))
@@ -248,11 +228,9 @@ def prepare_features(examples):
             else:
                 features['sop_input_ids'].append(tokenizer.convert_tokens_to_ids(['<s>'] + tokens_b + ['</s>'] + tokens_a + ['</s>']))
                 features['sop_labels'].append([0])
-    #print(features)
-    #exit()
+
     return features
 
-#print(datasets["train"][0])
 
 if training_args.do_train:
     train_dataset = datasets["train"].map(
@@ -262,9 +240,6 @@ if training_args.do_train:
         remove_columns=column_names,
         load_from_cache_file=not data_args.overwrite_cache,
     )
-
-#print(train_dataset[0],len(train_dataset))
-#exit()
 
 # Data collator
 @dataclass
@@ -278,7 +253,7 @@ class OurDataCollatorWithPadding:
     mlm_probability: float = data_args.mlm_probability
 
     def __call__(self, features: List[Dict[str, Union[List[int], List[List[int]], torch.Tensor]]]) -> Dict[str, torch.Tensor]:
-        #print(features[0])
+
         special_keys = ['input_ids', 'attention_mask', 'token_type_ids', 'mlm_input_ids', 'mlm_labels']
         bs = len(features)
         if bs > 0:
@@ -288,7 +263,7 @@ class OurDataCollatorWithPadding:
         flat_features = []
         for feature in features:
             for i in range(num_sent):
-                #flat_features.append({k: feature[k][i] if k in special_keys else feature[k] for k in feature})
+                
                 flat_features.append({k: feature[k][i] if k in special_keys else feature[k] for k in ['input_ids', 'attention_mask']})
 
         batch = self.tokenizer.pad(
@@ -311,8 +286,6 @@ class OurDataCollatorWithPadding:
                 return_tensors="pt",
             )
         
-        #print(batch_sop)
-        #exit()
         if model_args.do_mlm:
             batch["mlm_input_ids"], batch["mlm_labels"] = self.mask_tokens(batch["input_ids"])
 
@@ -381,7 +354,6 @@ else:
 finetune_dataloader,eval_dataloader=get_data_loader(args,config)
 pretrain_dataloader = DataLoader(train_dataset, shuffle=False, collate_fn=data_collator,
                                     batch_size=args.batch_size,drop_last=True)
-#pretrain_dataloader=trainer.get_train_dataloader()
 
 class Finetune(torch.nn.Module):
     def __init__(self):
@@ -413,7 +385,7 @@ if args.task == 'stsb':
 else:
     loss_fct = CrossEntropyLoss()
 
-save_dir='/data1/ruiyi/taskweight/{}_save'.format(args.task)
+save_dir='{}_save'.format(args.task)
 
 if not os.path.isdir(save_dir):
     os.makedirs(save_dir)
@@ -433,10 +405,6 @@ class Pretraining(ImplicitProblem):
         return get_linear_schedule_with_warmup(self.optimizer, 
                                             num_warmup_steps=args.iters * args.warmup_ratio * 3, 
                                             num_training_steps=args.iters)
-        #return optim.lr_scheduler.StepLR(
-        #    self.optimizer, step_size=args.step_size, gamma=args.gamma
-        #)
-
 
 
 class Finetuning(ImplicitProblem):
@@ -447,8 +415,6 @@ class Finetuning(ImplicitProblem):
 
         logits = self.module(batch)
 
-        #loss = loss_fct(logits.view(-1), labels.view(-1))+self.reg_loss()
-        #print(logits.shape,labels.shape)
         loss = loss_fct(logits, labels)+self.reg_loss()
         if args.wandb:
             wandb.log({"finetuning loss": loss.item()})
@@ -482,7 +448,6 @@ class Reweighting(ImplicitProblem):
 
         logits = self.finetune.module(batch)
         
-        #loss = loss_fct(logits.view(-1), labels.view(-1))+self.reg_loss()
         loss = loss_fct(logits, labels)+self.reg_loss()
         if args.wandb:
             wandb.log({"reweighting loss": loss.item()})
@@ -536,10 +501,10 @@ class LBIEngine(Engine):
                     preds=model_test(batch).argmax(-1).detach().cpu().numpy()
 
                 refs = batch['labels'].detach().cpu().numpy()
-                #print(preds,refs)
+                
                 metric.add_batch(references=refs, predictions=preds)
                 del batch
-            #break
+
         result=metric.compute()
         weight=torch.softmax(self.reweight.module.weight,0)
         if args.wandb:

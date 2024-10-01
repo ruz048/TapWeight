@@ -14,6 +14,6 @@ python reweight.py \
     --iters 10000 \
     --resume imagemol/ImageMol.pth.tar \
     --val_freq 100 \
-    --wandb \
+    --wandb 
     
     

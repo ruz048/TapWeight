@@ -148,8 +148,6 @@ if args.wandb:
         },
     )
 
-print(args)
-
 args.image_folder, args.txt_file = get_datasets(args.dataset, args.dataroot, data_type="processed")
 args.verbose = True
 
@@ -334,7 +332,7 @@ class Reweight(torch.nn.Module):
 
     def forward(self):
         return torch.softmax(self.weight,0)
-        #return self.weight/torch.sum(self.weight)
+
 
 model_reweight = Reweight().to(device)
 
@@ -407,7 +405,6 @@ class Finetuning(ImplicitProblem):
 
         model=self.module
         pred = model(images)
-        #print(pred)
         labels = labels.view(pred.shape).to(torch.float64)
         if task_type == "classification":
             is_valid = labels != -1
@@ -434,12 +431,10 @@ class Finetuning(ImplicitProblem):
 
     def reg_loss(self):
         loss = 0
-        #count=0
         for (n1, p1), (n2, p2) in zip(
             self.module.named_parameters(), self.pretrain.module.embedding_layer.named_parameters()
         ):
             loss = loss + args.lam * (p1 - p2).pow(2).sum()
-            #count += p1.numel()
 
         return loss
     def configure_scheduler(self):
@@ -472,7 +467,7 @@ class Reweighting(ImplicitProblem):
                 loss = torch.sum(loss_mat * cls_weights) / torch.sum(is_valid)
         elif task_type == "regression":
             loss = criterion_ft(pred.double(), labels)
-        #loss += self.reg_loss()
+
         if args.wandb:
             wandb.log({"reweighting loss": loss.item()})
             wandb.log({"reweighting lr": self.optimizer.param_groups[0]['lr']})
@@ -480,14 +475,12 @@ class Reweighting(ImplicitProblem):
 
     def reg_loss(self):
         loss = 0
-        #count=0
+
         for (n1, p1), (n2, p2) in zip(
             self.finetune.module.named_parameters(), self.pretrain.module.embedding_layer.named_parameters()
         ):
             loss = loss + args.lam * (p1 - p2).pow(2).sum()
-            #count += p1.numel()
 
-        #return loss/count
         return loss
     def configure_scheduler(self):
         return optim.lr_scheduler.StepLR(

@@ -358,7 +358,6 @@ class Reweight(torch.nn.Module):
 
     def forward(self):
         return torch.softmax(self.weight,0)
-        #return self.weight/torch.sum(self.weight)
 
 class Pretrain(torch.nn.Module):
     def __init__(self):
@@ -371,9 +370,9 @@ class Pretrain(torch.nn.Module):
         if is_pt:
             return self.imagemol(batch)
         else:
-            #print(batch.shape)
+
             x = self.imagemol.embedding_layer(batch)
-            #print(tmp.shape)
+
             x = self.avgpool(x)
             x = torch.flatten(x, 1)
             return self.ftfc(x)
@@ -448,7 +447,7 @@ class Pretraining(ImplicitProblem):
 
         model=self.module
         pred = model(images, False)
-        #print(pred)
+
         labels = labels.view(pred.shape).to(torch.float64)
         if task_type == "classification":
             is_valid = labels != -1
@@ -499,7 +498,7 @@ class Reweighting(ImplicitProblem):
                 loss = torch.sum(loss_mat * cls_weights) / torch.sum(is_valid)
         elif task_type == "regression":
             loss = criterion_ft(pred.double(), labels)
-        #loss += self.reg_loss()
+
         if args.wandb:
             wandb.log({"reweighting loss": loss.item()})
             wandb.log({"reweighting lr": self.optimizer.param_groups[0]['lr']})
@@ -508,14 +507,12 @@ class Reweighting(ImplicitProblem):
 
     def reg_loss(self):
         loss = 0
-        #count=0
+
         for (n1, p1), (n2, p2) in zip(
             self.finetune.module.named_parameters(), self.pretrain.module.embedding_layer.named_parameters()
         ):
             loss = loss + args.lam * (p1 - p2).pow(2).sum()
-            #count += p1.numel()
 
-        #return loss/count
         return loss
     def configure_scheduler(self):
         return optim.lr_scheduler.StepLR(

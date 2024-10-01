@@ -28,31 +28,6 @@ task_to_keys = {
     "wnli": ("sentence1", "sentence2"),
 }
 
-class LoraModule(nn.Module):
-    #assume only lora layer for query and value layer
-    def __init__(self,num_layers,lora_r,in_feat,out_feat,device,config):
-        super().__init__()
-        self.list_A=nn.ModuleList([nn.Linear(in_feat, lora_r, bias=False) for _ in range(num_layers*2)])
-        self.list_B=nn.ModuleList([nn.Linear(lora_r, out_feat, bias=False) for _ in range(num_layers*2)])
-        self.clf=RobertaClassificationHead(config)
-        self.loss_fct=CrossEntropyLoss()
-        self.num_labels=config.num_labels
-        self.device=device
-    def forward(self,batch,roberta):
-        labels=batch['labels'].to(self.device)
-        input_dict={k: v.to(self.device) for k, v in batch.items() if k != "labels"}
-
-        input_dict['list_A']= self.list_A
-        input_dict['list_B']=self.list_B
-
-        outputs = roberta(**input_dict)
-        logits = self.clf(outputs[0])
-        #print(logits)
-        loss = self.loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
-
-        preds=logits.argmax(dim=-1).detach().cpu().numpy()
-        return loss, preds
-
 def get_data_loader(args,config):
 
     tokenizer = AutoTokenizer.from_pretrained("roberta-base")
@@ -114,8 +89,7 @@ def get_data_loader(args,config):
 
     dataset = datasets.train_test_split(test_size=args.test_size,shuffle=True)
     train_dataset,eval_dataset=dataset['train'],dataset['test']
-    #train_dataset=datasets
-    #eval_dataset=datasets_val
+
     print('finetune dataset length',len(train_dataset))
     print('reweight dataset length',len(eval_dataset))
     finetune_dataloader = DataLoader(train_dataset, shuffle=False, collate_fn=default_data_collator,
@@ -250,7 +224,6 @@ def get_data_loader_tr(args,config):
 
 
 def argument_parser(parser):
-    #parser = argparse.ArgumentParser(description="regularize the target by the source")
     parser.add_argument("--gpu", type=int, default=0)
     parser.add_argument("--source_domain", type=str, default="BookCorpus")
     parser.add_argument("--target_domain", type=str, default="GLUE")
