@@ -1,19 +1,11 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import torch.distributed as dist
 
-import transformers
-from transformers import RobertaTokenizer
 from transformers.models.roberta.modeling_roberta import RobertaPreTrainedModel, RobertaModel, RobertaLMHead, RobertaClassificationHead
 from transformers.models.bert.modeling_bert import BertPreTrainedModel, BertModel, BertLMPredictionHead
-from transformers.activations import gelu
-from transformers.file_utils import (
-    add_code_sample_docstrings,
-    add_start_docstrings,
-    add_start_docstrings_to_model_forward,
-    replace_return_docstrings,
-)
+from transformers.models.deberta.modeling_deberta import DebertaPreTrainedModel, DebertaModel, DebertaLMPredictionHead
+
 from transformers.modeling_outputs import SequenceClassifierOutput, BaseModelOutputWithPoolingAndCrossAttentions
 
 class MLPLayer(nn.Module):
@@ -62,7 +54,7 @@ class Pooler(nn.Module):
 
     def forward(self, attention_mask, outputs):
         last_hidden = outputs.last_hidden_state
-        pooler_output = outputs.pooler_output
+        #pooler_output = outputs.pooler_output
         hidden_states = outputs.hidden_states
 
         if self.pooler_type in ['cls_before_pooler', 'cls']:
@@ -139,23 +131,20 @@ def cl_forward(cls,
 
         sop_pred = cls.sop_head(sop_outputs.last_hidden_state)
 
-    outputs = encoder(
-        input_ids,
-        attention_mask=attention_mask,
-        token_type_ids=token_type_ids,
-        position_ids=position_ids,
-        head_mask=head_mask,
-        inputs_embeds=inputs_embeds,
-        output_attentions=output_attentions,
-        output_hidden_states=True if cls.model_args.pooler_type in ['avg_top2', 'avg_first_last'] else False,
-        return_dict=True,
-    )
-
-    # MLM auxiliary objective
-    if mlm_input_ids is not None:
-        mlm_input_ids = mlm_input_ids.view((-1, mlm_input_ids.size(-1)))
-        mlm_outputs = encoder(
-            mlm_input_ids,
+    if isinstance(encoder, DebertaModel):
+        outputs = encoder(
+            input_ids,
+            attention_mask=attention_mask,
+            token_type_ids=token_type_ids,
+            position_ids=position_ids,
+            inputs_embeds=inputs_embeds,
+            output_attentions=output_attentions,
+            output_hidden_states=True,
+            return_dict=True,
+        )
+    else:
+        outputs = encoder(
+            input_ids,
             attention_mask=attention_mask,
             token_type_ids=token_type_ids,
             position_ids=position_ids,
@@ -165,6 +154,33 @@ def cl_forward(cls,
             output_hidden_states=True if cls.model_args.pooler_type in ['avg_top2', 'avg_first_last'] else False,
             return_dict=True,
         )
+
+    # MLM auxiliary objective
+    if mlm_input_ids is not None:
+        mlm_input_ids = mlm_input_ids.view((-1, mlm_input_ids.size(-1)))
+        if isinstance(encoder, DebertaModel):
+            mlm_outputs = encoder(
+                mlm_input_ids,
+                attention_mask=attention_mask,
+                token_type_ids=token_type_ids,
+                position_ids=position_ids,
+                inputs_embeds=inputs_embeds,
+                output_attentions=output_attentions,
+                output_hidden_states=True if cls.model_args.pooler_type in ['avg_top2', 'avg_first_last'] else False,
+                return_dict=True,
+            )
+        else:
+            mlm_outputs = encoder(
+                mlm_input_ids,
+                attention_mask=attention_mask,
+                token_type_ids=token_type_ids,
+                position_ids=position_ids,
+                head_mask=head_mask,
+                inputs_embeds=inputs_embeds,
+                output_attentions=output_attentions,
+                output_hidden_states=True if cls.model_args.pooler_type in ['avg_top2', 'avg_first_last'] else False,
+                return_dict=True,
+            )
 
     # Pooling
     pooler_output = cls.pooler(attention_mask, outputs)
@@ -268,18 +284,29 @@ def sentemb_forward(
 ):
 
     return_dict = return_dict if return_dict is not None else cls.config.use_return_dict
-
-    outputs = encoder(
-        input_ids,
-        attention_mask=attention_mask,
-        token_type_ids=token_type_ids,
-        position_ids=position_ids,
-        head_mask=head_mask,
-        inputs_embeds=inputs_embeds,
-        output_attentions=output_attentions,
-        output_hidden_states=True if cls.pooler_type in ['avg_top2', 'avg_first_last'] else False,
-        return_dict=True,
-    )
+    if isinstance(encoder, DebertaModel):
+        outputs = encoder(
+            input_ids,
+            attention_mask=attention_mask,
+            token_type_ids=token_type_ids,
+            position_ids=position_ids,
+            inputs_embeds=inputs_embeds,
+            output_attentions=output_attentions,
+            output_hidden_states=True if cls.pooler_type in ['avg_top2', 'avg_first_last'] else False,
+            return_dict=True,
+        )
+    else:
+        outputs = encoder(
+            input_ids,
+            attention_mask=attention_mask,
+            token_type_ids=token_type_ids,
+            position_ids=position_ids,
+            head_mask=head_mask,
+            inputs_embeds=inputs_embeds,
+            output_attentions=output_attentions,
+            output_hidden_states=True if cls.pooler_type in ['avg_top2', 'avg_first_last'] else False,
+            return_dict=True,
+        )
 
     pooler_output = cls.pooler(attention_mask, outputs)
     if cls.pooler_type == "cls" and not cls.model_args.mlp_only_train:
@@ -406,6 +433,93 @@ class RobertaForCL(RobertaPreTrainedModel):
             )
         else:
             return cl_forward(self, self.roberta,
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                token_type_ids=token_type_ids,
+                position_ids=position_ids,
+                head_mask=head_mask,
+                inputs_embeds=inputs_embeds,
+                labels=labels,
+                output_attentions=output_attentions,
+                output_hidden_states=output_hidden_states,
+                return_dict=return_dict,
+                mlm_input_ids=mlm_input_ids,
+                mlm_labels=mlm_labels,
+                mlm_weights=mlm_weights,
+                sop_input_ids=sop_input_ids,
+                sop_labels=sop_labels,
+                sop_attention_mask=sop_attention_mask
+            )
+
+class DebertaClassificationHead(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.dense = nn.Linear(config.hidden_size, config.hidden_size)
+        self.dropout = nn.Dropout(config.hidden_dropout_prob)
+        self.out_proj = nn.Linear(config.hidden_size, config.num_labels)
+
+    def forward(self, hidden_states, **kwargs):
+        # Assuming CLS token or pooled representation
+        x = hidden_states[:, 0, :]  # Typically the CLS token
+        x = self.dropout(x)
+        x = self.dense(x)
+        x = torch.relu(x)  # Often ReLU, but can vary
+        x = self.dropout(x)
+        x = self.out_proj(x)
+        return x
+
+
+class DebertaForCL(DebertaPreTrainedModel):
+    _keys_to_ignore_on_load_missing = [r"position_ids"]
+
+    def __init__(self, config, *model_args, **model_kargs):
+        super().__init__(config)
+        self.model_args = model_kargs["model_args"]
+        self.deberta = DebertaModel(config)
+
+        if self.model_args.do_mlm:
+            self.lm_head = DebertaLMPredictionHead(config)
+
+        if self.model_args.do_sop:
+            self.sop_head = DebertaClassificationHead(config)
+
+
+        cl_init(self, config)
+
+    def forward(self,
+        input_ids=None,
+        attention_mask=None,
+        token_type_ids=None,
+        position_ids=None,
+        head_mask=None,
+        inputs_embeds=None,
+        labels=None,
+        output_attentions=None,
+        output_hidden_states=None,
+        return_dict=None,
+        sent_emb=False,
+        mlm_input_ids=None,
+        mlm_labels=None,
+        mlm_weights=None,
+        sop_input_ids=None,
+        sop_labels=None,
+        sop_attention_mask=None
+    ):
+        if sent_emb:
+            return sentemb_forward(self, self.deberta,
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                token_type_ids=token_type_ids,
+                position_ids=position_ids,
+                head_mask=head_mask,
+                inputs_embeds=inputs_embeds,
+                labels=labels,
+                output_attentions=output_attentions,
+                output_hidden_states=output_hidden_states,
+                return_dict=return_dict
+            )
+        else:
+            return cl_forward(self, self.deberta,
                 input_ids=input_ids,
                 attention_mask=attention_mask,
                 token_type_ids=token_type_ids,

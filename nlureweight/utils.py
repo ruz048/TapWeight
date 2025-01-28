@@ -2,15 +2,15 @@ import logging
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-from datasets import load_from_disk,load_dataset,concatenate_datasets
+from datasets import load_dataset,concatenate_datasets
 from transformers import default_data_collator,DataCollatorForLanguageModeling,MODEL_FOR_MASKED_LM_MAPPING,PretrainedConfig,AutoTokenizer,TrainingArguments
 from transformers.models.roberta.modeling_roberta import RobertaClassificationHead
 import numpy as np
 from dataclasses import dataclass, field
 from math import prod
 from torch.nn import CrossEntropyLoss
-from transformers.file_utils import cached_property, torch_required, is_torch_available, is_torch_tpu_available
-from typing import Optional, Union, List, Dict, Tuple
+from transformers.file_utils import cached_property, torch_required, is_torch_tpu_available
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 MODEL_CONFIG_CLASSES = list(MODEL_FOR_MASKED_LM_MAPPING.keys())
@@ -26,24 +26,66 @@ task_to_keys = {
     "sst2": ("sentence", None),
     "stsb": ("sentence1", "sentence2"),
     "wnli": ("sentence1", "sentence2"),
+    "imdb": ("text", None),
+    "agnews": ("text", None),
+    "scierc": ("text", None),
+    "rct": ("text", None),
 }
+
+class LoraModule(nn.Module):
+    #assume only lora layer for query and value layer
+    def __init__(self,num_layers,lora_r,in_feat,out_feat,device,config):
+        super().__init__()
+        self.list_A=nn.ModuleList([nn.Linear(in_feat, lora_r, bias=False) for _ in range(num_layers*2)])
+        self.list_B=nn.ModuleList([nn.Linear(lora_r, out_feat, bias=False) for _ in range(num_layers*2)])
+        self.clf=RobertaClassificationHead(config)
+        self.loss_fct=CrossEntropyLoss()
+        self.num_labels=config.num_labels
+        self.device=device
+    def forward(self,batch,roberta):
+        labels=batch['labels'].to(self.device)
+        input_dict={k: v.to(self.device) for k, v in batch.items() if k != "labels"}
+
+        input_dict['list_A']= self.list_A
+        input_dict['list_B']=self.list_B
+
+        outputs = roberta(**input_dict)
+        logits = self.clf(outputs[0])
+        #print(logits)
+        loss = self.loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
+
+        preds=logits.argmax(dim=-1).detach().cpu().numpy()
+        return loss, preds
 
 def get_data_loader(args,config):
 
     tokenizer = AutoTokenizer.from_pretrained("roberta-base")
 
-
-    data_collator = DataCollatorForLanguageModeling(tokenizer=tokenizer)
-
-    datasets = load_dataset("glue", args.task,split='train')
     if args.task == 'mnli':
+        datasets = load_dataset("glue", args.task,split='train')
         datasets_val = concatenate_datasets([load_dataset("glue", args.task,split='validation_matched'),load_dataset("glue", args.task,split='validation_mismatched')])
+    elif args.task == 'imdb': 
+        datasets = load_dataset("stanfordnlp/imdb",split='train')
+        datasets_val = load_dataset("stanfordnlp/imdb",split='test')
+    elif args.task == 'agnews': 
+        datasets = load_dataset("fancyzhx/ag_news", split='train')
+        datasets_val = load_dataset("fancyzhx/ag_news",split='test')
+    elif args.task == 'scierc': 
+        datasets = load_dataset("hrithikpiyush/scierc", split='train')
+        datasets_val = load_dataset("hrithikpiyush/scierc",split='validation')
+    elif args.task == 'rct': 
+        datasets = load_dataset("armanc/pubmed-rct20k", split='train')
+        datasets_val = load_dataset("armanc/pubmed-rct20k",split='validation')
     else:
+        datasets = load_dataset("glue", args.task,split='train')
         datasets_val = load_dataset("glue", args.task,split='validation')
 
     is_regression = args.task == "stsb"
     if not is_regression:
-        label_list = datasets.features["label"].names
+        if args.task == 'scierc' or args.task == 'rct':
+            label_list = sorted(set(datasets["label"]))
+        else:
+            label_list = datasets.features["label"].names
         num_labels = len(label_list)
     else:
         num_labels = 1
@@ -64,7 +106,7 @@ def get_data_loader(args,config):
 
     elif args.task is None and not is_regression:
         label_to_id = {v: i for i, v in enumerate(label_list)}
-
+    if args.task == 'rct':label_to_id = {v: i for i, v in enumerate(label_list)}
     max_seq_length = tokenizer.model_max_length
 
     def preprocess_function(examples):
@@ -83,18 +125,31 @@ def get_data_loader(args,config):
         datasets = datasets.map(preprocess_function, batched=True, remove_columns=["idx", sentence1_key, sentence2_key],load_from_cache_file=True)
         datasets_val = datasets_val.map(preprocess_function, batched=True, remove_columns=["idx", sentence1_key, sentence2_key],load_from_cache_file=True)
     else:
-        datasets = datasets.map(preprocess_function, batched=True, remove_columns=["idx", sentence1_key],load_from_cache_file=True)
-        datasets_val = datasets_val.map(preprocess_function, batched=True, remove_columns=["idx", sentence1_key],load_from_cache_file=True)
+        if args.task=='imdb' or args.task=='agnews':
+            datasets = datasets.map(preprocess_function, batched=True, remove_columns=[sentence1_key],load_from_cache_file=True)
+            datasets_val = datasets_val.map(preprocess_function, batched=True, remove_columns=[sentence1_key],load_from_cache_file=True)
+        elif args.task == 'scierc':
+            datasets = datasets.map(preprocess_function, batched=True, remove_columns=['metadata',sentence1_key],load_from_cache_file=True)
+            datasets_val = datasets_val.map(preprocess_function, batched=True, remove_columns=['metadata',sentence1_key],load_from_cache_file=True)
+        elif args.task == 'rct':
+            datasets = datasets.map(preprocess_function, batched=True, remove_columns=['abstract_id','sentence_id',sentence1_key],load_from_cache_file=True)
+            datasets_val = datasets_val.map(preprocess_function, batched=True, remove_columns=['abstract_id','sentence_id',sentence1_key],load_from_cache_file=True)
+        else:
+            datasets = datasets.map(preprocess_function, batched=True, remove_columns=["idx", sentence1_key],load_from_cache_file=True)
+            datasets_val = datasets_val.map(preprocess_function, batched=True, remove_columns=["idx", sentence1_key],load_from_cache_file=True)
 
-
-    dataset = datasets.train_test_split(test_size=args.test_size,shuffle=True)
-    train_dataset,eval_dataset=dataset['train'],dataset['test']
-
+    if args.task =='scierc' or args.task == 'rct':
+        train_dataset,eval_dataset=datasets,datasets_val
+    else:
+        dataset = datasets.train_test_split(test_size=args.test_size,shuffle=True)
+        train_dataset,eval_dataset=dataset['train'],dataset['test']
+    #train_dataset=datasets
+    #eval_dataset=datasets_val
     print('finetune dataset length',len(train_dataset))
     print('reweight dataset length',len(eval_dataset))
-    finetune_dataloader = DataLoader(train_dataset, shuffle=False, collate_fn=default_data_collator,
+    finetune_dataloader = DataLoader(train_dataset, shuffle=True, collate_fn=default_data_collator,
                                     batch_size=args.batch_size,drop_last=True)
-    eval_dataloader = DataLoader(eval_dataset, shuffle=False, collate_fn=default_data_collator,
+    eval_dataloader = DataLoader(eval_dataset, shuffle=True, collate_fn=default_data_collator,
                                     batch_size=args.batch_size,drop_last=True)
         
     return finetune_dataloader,eval_dataloader
@@ -105,12 +160,23 @@ def get_data_loader_val(args,config):
 
     if args.task == 'mnli':
         datasets = concatenate_datasets([load_dataset("glue", args.task,split='validation_matched'),load_dataset("glue", args.task,split='validation_mismatched')])
+    elif args.task == 'imdb': 
+        datasets = load_dataset("stanfordnlp/imdb", split='test')
+    elif args.task == 'agnews': 
+        datasets = load_dataset("fancyzhx/ag_news", split='test')
+    elif args.task == 'scierc': 
+        datasets = load_dataset("hrithikpiyush/scierc", split='test')
+    elif args.task == 'rct': 
+        datasets = load_dataset("armanc/pubmed-rct20k", split='test')
     else:
         datasets = load_dataset("glue", args.task,split='validation')
 
     is_regression = args.task == "stsb"
     if not is_regression:
-        label_list = datasets.features["label"].names
+        if args.task == 'scierc' or args.task == 'rct':
+            label_list = sorted(set(datasets["label"]))
+        else:
+            label_list = datasets.features["label"].names
         num_labels = len(label_list)
     else:
         num_labels = 1
@@ -131,6 +197,8 @@ def get_data_loader_val(args,config):
 
     elif args.task is None and not is_regression:
         label_to_id = {v: i for i, v in enumerate(label_list)}
+        #print(label_to_id)
+    if args.task == 'rct':label_to_id = {v: i for i, v in enumerate(label_list)}
 
     max_seq_length = tokenizer.model_max_length
 
@@ -150,13 +218,20 @@ def get_data_loader_val(args,config):
         datasets = datasets.map(preprocess_function, batched=True, remove_columns=["idx", sentence1_key, sentence2_key],load_from_cache_file=True)
         #datasets_val = datasets_val.map(preprocess_function, batched=True, remove_columns=["idx", sentence1_key, sentence2_key],load_from_cache_file=True)
     else:
-        datasets = datasets.map(preprocess_function, batched=True, remove_columns=["idx", sentence1_key],load_from_cache_file=True)
+        if args.task=='imdb' or args.task=='agnews':
+            datasets = datasets.map(preprocess_function, batched=True, remove_columns=[sentence1_key],load_from_cache_file=True)
+        elif args.task == 'scierc':
+            datasets = datasets.map(preprocess_function, batched=True, remove_columns=['metadata',sentence1_key],load_from_cache_file=True)
+        elif args.task == 'rct':
+            datasets = datasets.map(preprocess_function, batched=True, remove_columns=['abstract_id','sentence_id',sentence1_key],load_from_cache_file=True)
+        else:
+            datasets = datasets.map(preprocess_function, batched=True, remove_columns=["idx", sentence1_key],load_from_cache_file=True)
         #datasets_val = datasets_val.map(preprocess_function, batched=True, remove_columns=["idx", sentence1_key],load_from_cache_file=True)
 
 
 
     print('dataset length',len(datasets))
-    eval_dataloader = DataLoader(datasets, shuffle=False, collate_fn=default_data_collator,
+    eval_dataloader = DataLoader(datasets, shuffle=True, collate_fn=default_data_collator,
                                     batch_size=args.batch_size,drop_last=False)
         
     return eval_dataloader
@@ -165,13 +240,25 @@ def get_data_loader_val(args,config):
 def get_data_loader_tr(args,config):
 
     tokenizer = AutoTokenizer.from_pretrained("roberta-base")
+    #tokenizer = AutoTokenizer.from_pretrained("princeton-nlp/sup-simcse-roberta-base")
+    if args.task == 'imdb': 
+        datasets = load_dataset("stanfordnlp/imdb", split='train')
+    elif args.task == 'agnews': 
+        datasets = load_dataset("fancyzhx/ag_news", split='train')
+    elif args.task == 'scierc': 
+        datasets = concatenate_datasets([load_dataset("hrithikpiyush/scierc", split='train'), load_dataset("hrithikpiyush/scierc", split='validation')])
+    elif args.task == 'rct': 
+        datasets = concatenate_datasets([load_dataset("armanc/pubmed-rct20k", split='train'), load_dataset("armanc/pubmed-rct20k", split='validation')])
+    else:
+        datasets = load_dataset("glue", args.task,split='train')
 
-
-    datasets = load_dataset("glue", args.task,split='train')
 
     is_regression = args.task == "stsb"
     if not is_regression:
-        label_list = datasets.features["label"].names
+        if args.task == 'scierc' or args.task == 'rct':
+            label_list = sorted(set(datasets["label"]))
+        else:
+            label_list = datasets.features["label"].names
         num_labels = len(label_list)
     else:
         num_labels = 1
@@ -192,7 +279,7 @@ def get_data_loader_tr(args,config):
 
     elif args.task is None and not is_regression:
         label_to_id = {v: i for i, v in enumerate(label_list)}
-
+    if args.task == 'rct':label_to_id = {v: i for i, v in enumerate(label_list)}
     max_seq_length = tokenizer.model_max_length
 
     def preprocess_function(examples):
@@ -211,19 +298,27 @@ def get_data_loader_tr(args,config):
         datasets = datasets.map(preprocess_function, batched=True, remove_columns=["idx", sentence1_key, sentence2_key],load_from_cache_file=True)
         #datasets_val = datasets_val.map(preprocess_function, batched=True, remove_columns=["idx", sentence1_key, sentence2_key],load_from_cache_file=True)
     else:
-        datasets = datasets.map(preprocess_function, batched=True, remove_columns=["idx", sentence1_key],load_from_cache_file=True)
+        if args.task=='imdb' or args.task=='agnews':
+            datasets = datasets.map(preprocess_function, batched=True, remove_columns=[sentence1_key],load_from_cache_file=True)
+        elif args.task == 'scierc':
+            datasets = datasets.map(preprocess_function, batched=True, remove_columns=['metadata',sentence1_key],load_from_cache_file=True)
+        elif args.task == 'rct':
+            datasets = datasets.map(preprocess_function, batched=True, remove_columns=['abstract_id','sentence_id',sentence1_key],load_from_cache_file=True)
+        else:
+            datasets = datasets.map(preprocess_function, batched=True, remove_columns=["idx", sentence1_key],load_from_cache_file=True)
         #datasets_val = datasets_val.map(preprocess_function, batched=True, remove_columns=["idx", sentence1_key],load_from_cache_file=True)
 
 
 
     print('dataset length',len(datasets))
-    eval_dataloader = DataLoader(datasets, shuffle=False, collate_fn=default_data_collator,
+    eval_dataloader = DataLoader(datasets, shuffle=True, collate_fn=default_data_collator,
                                     batch_size=args.batch_size,drop_last=False)
         
     return eval_dataloader
 
 
 def argument_parser(parser):
+    #parser = argparse.ArgumentParser(description="regularize the target by the source")
     parser.add_argument("--gpu", type=int, default=0)
     parser.add_argument("--source_domain", type=str, default="BookCorpus")
     parser.add_argument("--target_domain", type=str, default="GLUE")
@@ -247,8 +342,9 @@ def argument_parser(parser):
     parser.add_argument("--val_freq", type=int, default=100)
     parser.add_argument("--load_save", action="store_true", default=False)
     parser.add_argument("--same_dataset", action="store_true", default=False)
-    parser.add_argument("--warmup_ratio", type=float, default=0.05)
+    parser.add_argument("--half", action="store_true", default=False)
     parser.add_argument("--test_size", type=float, default=0.2)
+    parser.add_argument("--grad_acc", type=int, default=1)
 
     return parser
 
